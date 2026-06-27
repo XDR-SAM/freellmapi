@@ -1,0 +1,9 @@
+[phases.setup]
+# Extend default node setup by adding compilation tools for better-sqlite3
+nixPkgs = ["...", "python3", "gnumake", "gcc"]
+
+[phases.build]
+cmds = ["npm run build"]
+
+[start]
+cmd = "node server/dist/index.js"

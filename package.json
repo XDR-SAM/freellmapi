@@ -12,6 +12,7 @@
     "test": "npm run test -w server && npm run test -w client --if-present",
     "build": "npm run build -w server && npm run build -w client",
     "build:server": "npm run build -w server",
+    "start": "node server/dist/index.js",
     "test:migrations": "npm run test:migrations -w server",
     "desktop:dev": "npm run build -w client && npm --prefix desktop run dev",
     "desktop:dist": "npm run build -w client && npm --prefix desktop run dist",
