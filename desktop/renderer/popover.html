@@ -25,7 +25,9 @@
   }
   body.light {
     --fg: rgba(20, 20, 24, 0.92);
-    --fg-dim: rgba(20, 20, 24, 0.56);
+    /* 0.56 measured 4.1:1 on the light panel — just under AA for the small text
+       that uses it (version, Quit). 0.62 takes it to 5.0:1. */
+    --fg-dim: rgba(20, 20, 24, 0.62);
     --fg-faint: rgba(20, 20, 24, 0.34);
     --hairline: rgba(0, 0, 0, 0.10);
     --card: rgba(0, 0, 0, 0.05);
@@ -132,6 +134,12 @@
   .ghost.copied { color: var(--ok); }
 
   .foot { display: flex; align-items: center; font-size: 11.5px; color: var(--fg-dim); }
+  #login-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .switch {
     position: relative; width: 30px; height: 18px; border-radius: 9px;
     background: var(--switch-off); margin-right: 7px; flex: none;
@@ -146,8 +154,19 @@
   }
   .switch.on { background: var(--ok); }
   .switch.on::after { left: 14px; }
+  /* The version is information, not decoration, so it may not sit at the
+     --fg-faint level the ornamental hairlines use: white at 32% over the solid
+     Windows panel is 2.9:1, well under the 4.5:1 needed to be readable (#703).
+     --fg-dim clears it in both themes (6.1:1 dark, 5.0:1 light). */
+  .version {
+    flex: none;
+    margin-left: auto;
+    color: var(--fg-dim);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
   .quit {
-    margin-left: auto; background: none; color: var(--fg-dim);
+    margin-left: 6px; background: none; color: var(--fg-dim);
     font-size: 11.5px; padding: 4px 6px; border-radius: 7px;
   }
   .quit:hover { background: rgba(255,255,255,0.08); color: var(--fg); }
@@ -199,6 +218,7 @@
     <div class="foot">
       <div class="switch" id="login"></div>
       <span id="login-label">Start at login</span>
+      <span class="version" id="version"></span>
       <button class="quit" id="quit">Quit</button>
     </div>
   </div>
@@ -260,6 +280,7 @@
     $('tokens').textContent = fmt(s.tokens);
     $('rate').textContent = s.successRate == null ? '' : (S.successSuffix || '{n}% success').replace('{n}', s.successRate);
     $('model').textContent = s.lastModel;
+    $('version').textContent = s.version ? 'v' + s.version : '';
     loginOn = s.loginItem;
     $('login').classList.toggle('on', loginOn);
     drawChart(s.hourly);

@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { Tray, Menu, app, nativeImage } from 'electron';
 import { togglePopover } from './popover.js';
 import { openDashboard } from './window.js';
+import { openLogsFolder, openBackupsFolder } from './logger.js';
 import { dt, type NativeLocale } from './i18n.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -14,7 +15,15 @@ let tray: Tray | null = null;
 // is rebuilt on every right-click, so reading the live locale via getLocale()
 // keeps its labels current after a language switch; the static tooltip is
 // refreshed separately (refreshTrayLocale).
-export function buildTray(port: number, token: string, getLocale: () => NativeLocale): Tray {
+export function buildTray(
+  port: number,
+  token: string,
+  getLocale: () => NativeLocale,
+  getLanAccess: () => boolean,
+  onToggleLanAccess: () => void,
+  getShowInDock: () => boolean,
+  onToggleShowInDock: () => void,
+): Tray {
   const iconPath = path.join(__dirname, '../assets/trayTemplate.png');
   const icon = nativeImage.createFromPath(iconPath);
   icon.setTemplateImage(true); // auto light/dark tint in the macOS menu bar
@@ -25,9 +34,23 @@ export function buildTray(port: number, token: string, getLocale: () => NativeLo
   tray.on('click', () => togglePopover(tray!));
   tray.on('right-click', () => {
     const locale = getLocale();
+    const lanOn = getLanAccess();
     tray!.popUpContextMenu(Menu.buildFromTemplate([
-      { label: dt(locale, 'runningOn', { addr: `127.0.0.1:${port}` }), enabled: false },
+      { label: dt(locale, 'runningOn', { addr: `${lanOn ? '0.0.0.0' : '127.0.0.1'}:${port}` }), enabled: false },
       { label: dt(locale, 'openDashboard'), click: () => openDashboard(port, token) },
+      { type: 'separator' },
+      // Toggling relaunches the app (the bind host is fixed at server start).
+      { label: dt(locale, 'lanAccess'), type: 'checkbox', checked: lanOn, click: () => onToggleLanAccess() },
+      // The Dock icon is the "yes, it is running" signal the tray cannot always
+      // give: macOS 26 lets the user hide menu-bar icons, and a notched display
+      // clips them (#807). Applied live, no relaunch.
+      { label: dt(locale, 'showInDock'), type: 'checkbox', checked: getShowInDock(), click: () => onToggleShowInDock() },
+      // #824: the password-reset code is printed to the log and nowhere else,
+      // so the folder holding it needs to be reachable without a terminal.
+      { label: dt(locale, 'openLogs'), click: () => openLogsFolder() },
+      // Scheduled/manual backups land in <userData>/backups; the dashboard
+      // only shows relative paths, so the tray is the discovery point.
+      { label: dt(locale, 'openBackups'), click: () => openBackupsFolder() },
       { type: 'separator' },
       { label: dt(locale, 'quitApp'), click: () => app.quit() },
     ]));

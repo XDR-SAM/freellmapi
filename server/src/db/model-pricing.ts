@@ -1,4 +1,4 @@
-import type Database from 'better-sqlite3';
+import type { Db } from './types.js';
 
 /**
  * Paid-equivalent pricing per model: what the SAME model (or its nearest
@@ -130,6 +130,12 @@ export const MODEL_PRICING: PricingRow[] = [
   ['ollama', 'mistral-large-3:675b', 0.50, 1.50],
   ['ollama', 'qwen3-coder-next', 0.11, 0.80],
   ['ollama', 'qwen3-coder:480b', 0.22, 1.80],
+  // Ollama Cloud free additions (#767) — priced at the same model's paid
+  // variant where one exists (mirrors the OpenCode Zen rows below).
+  ['ollama', 'minimax-m3', 0.30, 1.20],
+  ['ollama', 'nemotron-3-nano:30b', 0.03, 0.15],
+  ['ollama', 'nemotron-3-super', 0.09, 0.45],
+  ['ollama', 'nemotron-3-ultra', 0.50, 2.50],
 
   // OpenCode Zen (big-pickle is stealth — no equivalent; V24 rows priced at
   // the OpenRouter paid variants, snapshot 2026-06-07)
@@ -195,7 +201,7 @@ export const FALLBACK_OUTPUT_PER_M = 0.80;
  * known model. Runs on every boot — it's ~100 UPDATEs in one transaction
  * and keeps prices current when this map is updated in a release.
  */
-export function applyModelPricing(db: Database.Database): void {
+export function applyModelPricing(db: Db): void {
   const columns = db.prepare('PRAGMA table_info(models)').all() as { name: string }[];
   if (!columns.some(c => c.name === 'paid_input_per_m')) {
     db.prepare('ALTER TABLE models ADD COLUMN paid_input_per_m REAL').run();

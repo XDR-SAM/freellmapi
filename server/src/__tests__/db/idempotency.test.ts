@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import Database from 'better-sqlite3';
 import { initDb } from '../../db/index.js';
 
 /**
@@ -191,6 +190,18 @@ describe('Migration idempotency', () => {
       { model_id: 'magistral-medium-latest', context_window: 131072 },
       { model_id: 'mistral-large-latest',   context_window: 262144 },
     ]);
+  });
+
+  it('caps GitHub GPT-4.1 at the routable free-tier context window (#426)', () => {
+    process.env.ENCRYPTION_KEY = '0'.repeat(64);
+    const db = initDb(':memory:');
+
+    const row = db.prepare(`
+      SELECT context_window FROM models
+       WHERE platform = 'github' AND model_id = 'openai/gpt-4.1'
+    `).get() as { context_window: number };
+
+    expect(row.context_window).toBe(8000);
   });
 
   it('V14: cerebras deprecation disables qwen-3-235b and llama3.1-8b but keeps gpt-oss-120b enabled', () => {

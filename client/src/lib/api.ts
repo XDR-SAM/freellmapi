@@ -15,28 +15,51 @@ export function clearToken(): void {
 
 export const UNAUTHORIZED_EVENT = 'freellmapi:unauthorized';
 
+// Error thrown by apiFetch on a non-2xx response. Carries the HTTP status and
+// the server's machine-readable `error.type` so callers can branch on them.
+export interface ApiError extends Error {
+  status?: number;
+  code?: string;
+}
+
 export async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const token = getToken();
+  const headers = new Headers(options?.headers);
+  const isFormData = typeof FormData !== 'undefined' && options?.body instanceof FormData;
+  if (!isFormData && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
   const res = await fetch(`${BASE}${path}`, {
     // `...options` first so an explicit method/body/signal applies, but headers
     // are merged last — otherwise an options.headers would clobber the
     // Content-Type and Authorization we set here.
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options?.headers,
-    },
+    headers,
   });
-  if (res.status === 401) {
-    // Session missing/expired — drop the token and let the AuthGate re-render.
-    clearToken();
-    window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
-  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: { message: res.statusText } }));
-    throw new Error(body.error?.message ?? `HTTP ${res.status}`);
+    // A 401 ends the dashboard session ONLY when it is OUR auth saying so.
+    // Discover/probe endpoints deliberately relay an upstream provider's 401
+    // ("the endpoint rejected the key") with its status intact; treating those
+    // as session-expired signed the operator out every time they tested a bad
+    // provider key. The auth middleware and every session 401 carry
+    // type 'authentication_error'; upstream relays never do.
+    if (res.status === 401 && body.error?.type === 'authentication_error') {
+      clearToken();
+      window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
+    }
+    // Surface the HTTP status and the machine-readable error type on the thrown
+    // Error so callers can branch on them (e.g. the setup form reveals a code
+    // field on a `setup_code_required` 403). `.message` behaviour is unchanged.
+    const err = new Error(body.error?.message ?? `HTTP ${res.status}`) as ApiError;
+    err.status = res.status;
+    err.code = body.error?.type;
+    throw err;
   }
+  if (res.status === 204) return undefined as T;
   // A 200 whose body isn't JSON means this request never reached the API — the
   // usual cause is a reverse proxy (or static host) serving the dashboard's
   // index.html for /api/* instead of forwarding it to the backend. Without this

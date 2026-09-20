@@ -1,6 +1,7 @@
 import type { ModelListRow } from '@freellmapi/shared/types.js';
 import { getDb } from '../db/index.js';
 import { isUnifyEnabled, getModelGroups } from './model-groups.js';
+import { hasUsableKeyForModel } from './router.js';
 
 // Shared catalog-listing logic behind both the OpenAI `GET /v1/models` and the
 // Anthropic `GET /v1/models` endpoints, so the two wire formats list the exact
@@ -15,6 +16,16 @@ export interface NormalizedModel {
   enabled: number;
   contextWindow: number | null;
   intel: number;
+  // Platforms that can serve this entry (group members under unify, a single
+  // platform otherwise) + tool capability — feeds /v1/models
+  // `supported_parameters` so agents can pick knobs per model.
+  platforms: string[];
+  supportsTools: boolean;
+  // Dynamic execution status for agents: `ready` (a key can serve it right
+  // now), `needsKey` (disabled, or no enabled key matches it — available=0's
+  // breakdown), or `exhausted` (keys exist but every one is currently blocked,
+  // so a request would fail immediately).
+  executionStatus: 'ready' | 'needsKey' | 'exhausted';
 }
 
 export interface ModelListing {
@@ -24,6 +35,23 @@ export interface ModelListing {
   // among models that can serve a request right now (null when nothing is
   // connected). Computed over available models regardless of any caller filter.
   autoContextWindow: number | null;
+}
+
+// `ready` — at least one key could actually serve a request for this model
+// right now: enabled, healthy or never probed (probing is lazy, so an unprobed
+// key counts as usable), not scoped away from the model (#657), not on
+// cooldown, and inside its rate and token windows. `exhausted` — keys match
+// the model but every one of them is currently blocked, so a request would
+// fail straight away. `needsKey` — nothing matches it at all, or the model is
+// disabled.
+//
+// The gates are the router's own (hasOtherUsableKey), deliberately rather than
+// a second reading of api_keys.status: a live 429 never writes that column, it
+// writes a cooldown row (see services/ratelimit.ts, lib/fallback-loop.ts), so
+// status alone reports a cooling-down model as ready.
+function executionStatusFor(modelDbIds: number[], available: number): 'ready' | 'needsKey' | 'exhausted' {
+  if (available !== 1) return 'needsKey';
+  return modelDbIds.some(id => hasUsableKeyForModel(id)) ? 'ready' : 'exhausted';
 }
 
 export function buildModelListing(): ModelListing {
@@ -41,9 +69,9 @@ export function buildModelListing(): ModelListing {
   if (isUnifyEnabled()) {
     // Unify ON: one entry per logical model group. Pull per-row availability +
     // context keyed by db id, then aggregate over each group's members.
-    type AvailRow = { id: number; platform: string; intelligence_rank: number; context_window: number | null; enabled: number; available: number };
+    type AvailRow = { id: number; platform: string; intelligence_rank: number; context_window: number | null; enabled: number; available: number; supports_tools: number };
     const rows = db.prepare(`
-      SELECT m.id, m.platform, m.intelligence_rank, m.context_window,
+      SELECT m.id, m.platform, m.intelligence_rank, m.context_window, m.supports_tools,
              m.enabled AS enabled, ${availableExpr} AS available
       FROM models m
     `).all() as AvailRow[];
@@ -51,23 +79,29 @@ export function buildModelListing(): ModelListing {
     allListed = getModelGroups().map(g => {
       const infos = g.members.map(m => byId.get(m.model_db_id)).filter(Boolean) as AvailRow[];
       const ctxs = infos.map(i => i.context_window).filter((c): c is number => c != null);
+      const available = infos.some(i => i.available === 1) ? 1 : 0;
       return {
         id: g.canonicalId,
         name: g.groupLabel,
         ownedBy: 'freellmapi',
-        available: infos.some(i => i.available === 1) ? 1 : 0,
+        available,
         enabled: infos.some(i => i.enabled === 1) ? 1 : 0,
         contextWindow: ctxs.length ? Math.max(...ctxs) : null,
         intel: infos.length ? Math.min(...infos.map(i => i.intelligence_rank)) : Number.MAX_SAFE_INTEGER,
+        platforms: [...new Set(infos.map(i => i.platform))],
+        supportsTools: infos.some(i => i.supports_tools === 1),
+        // A group is ready when ANY member can serve it — that is exactly the
+        // choice the router has when it dispatches the group.
+        executionStatus: executionStatusFor(g.members.map(m => m.model_db_id), available),
       };
     });
   } else {
     // Unify OFF: one entry per model_id (dedup picks the available, smartest
     // representative row).
     const models = db.prepare(`
-      SELECT platform, model_id, display_name, context_window, enabled, available, intelligence_rank, id
+      SELECT platform, model_id, display_name, context_window, enabled, available, intelligence_rank, id, supports_tools
       FROM (
-        SELECT m.platform, m.model_id, m.display_name, m.context_window, m.intelligence_rank, m.id,
+        SELECT m.platform, m.model_id, m.display_name, m.context_window, m.intelligence_rank, m.id, m.supports_tools,
                m.enabled AS enabled,
                ${availableExpr} AS available,
                ROW_NUMBER() OVER (
@@ -77,11 +111,14 @@ export function buildModelListing(): ModelListing {
         FROM models m
       )
       WHERE rn = 1
-    `).all() as (ModelListRow & { intelligence_rank: number; id: number })[];
+    `).all() as (ModelListRow & { intelligence_rank: number; id: number; supports_tools: number })[];
     allListed = models.map(m => ({
       id: m.model_id, name: m.display_name, ownedBy: m.platform,
       available: m.available, enabled: m.enabled, contextWindow: m.context_window,
       intel: m.intelligence_rank,
+      platforms: [m.platform],
+      supportsTools: m.supports_tools === 1,
+      executionStatus: executionStatusFor([m.id], m.available),
     }));
   }
 
